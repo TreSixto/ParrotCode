@@ -1,0 +1,120 @@
+import cv2
+
+import numpy as np
+
+from pyparrot.Minidrone import Mambo
+from pyparrot.DroneVision import DroneVision
+from pyparrot.Model import Model
+
+hsvVals=[0,0,117,179,22,219]
+
+
+# set this to true if you want to fly for the demo
+testFlying = False
+
+class UserVision:
+    def __init__(self, vision):
+        self.index = 0
+        self.vision = vision
+
+    def save_pictures(self, args):
+        print("in save pictures on image %d " % self.index)
+
+        img = self.vision.get_latest_valid_picture()
+
+        if (img is not None):
+            filename = "test_image_%06d.png" % self.index
+            cv2.imwrite(filename, img)
+            self.index +=1
+            #print(self.index)
+
+
+
+# you will need to change this to the address of YOUR mambo
+mamboAddr = "e0:14:d0:63:3d:d0"
+
+# make my mambo object
+# remember to set True/False for the wifi depending on if you are using the wifi or the BLE to connect
+mambo = Mambo(mamboAddr, use_BLE=True)
+print("trying to connect to mambo now")
+success = mambo.connect(num_retries=3)
+print("connected: %s" % success)
+
+
+def thresholding(userVision):
+    hsv = cv2.cvtColor(userVision, cv2.COLOR_BGR2HSV)
+    lower = np.array([hsvVals[0], hsvVals[1], hsvVals[2]])
+    upper = np.array([hsvVals[3], hsvVals[4], hsvVals[5]])
+    mask = cv2.inRange(hsv, lower, upper)
+    return mask
+
+
+def getContours(imgThres, userVision):
+    contours, hierarchy=cv2.findContours(imgThres,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_NONE)
+    biggest = max(contours, key= cv2.contourArea)
+    x,y,w,h =cv2.boundingRect(biggest)
+
+    cx= x + w//2
+    cy= y + h//2
+
+    cv2.drawContours(userVision, contours,-1, (255,0,255),7)
+    cv2.circle(userVision,(cx,cy),10,(0,255,0),cv2.FILLED)
+if (success):
+
+    # get the state informationl
+    print("sleeping")
+    mambo.smart_sleep(1)
+    mambo.ask_for_state_update()
+    mambo.smart_sleep(1)
+
+    print("Preparing to open vision")
+    mamboVision = DroneVision(mambo, Model.MAMBO, buffer_size=30)
+    userVision = UserVision(mamboVision)
+    mamboVision.set_user_callback_function(userVision.save_pictures, user_callback_args=None)
+    success = mamboVision.open_video()
+
+    imgThres= thresholding(userVision)
+    success2 = mamboVision.open_video(imgThres)
+
+    getContours(imgThres,userVision)
+
+    print("Success in opening vision is %s" % success)
+    print("Success in opening vision is %s" % success2)
+
+    if (success):
+        print("Vision successfully started!")
+        #removed the user call to this function (it now happens in open_video())
+        #mamboVision.start_video_buffering()
+
+
+
+        if (testFlying):
+            print("taking off!")
+            mambo.safe_takeoff(5)
+
+            if (mambo.sensors.flying_state != "emergency"):
+                print("flying state is %s" % mambo.sensors.flying_state)
+                print("Flying direct: going up")
+                mambo.fly_direct(roll=0, pitch=0, yaw=0, vertical_movement=20, duration=1)
+
+                print("flip left")
+                print("flying state is %s" % mambo.sensors.flying_state)
+                success = mambo.flip(direction="left")
+                print("mambo flip result %s" % success)
+                mambo.smart_sleep(5)
+
+            print("landing")
+            print("flying state is %s" % mambo.sensors.flying_state)
+            mambo.safe_land(5)
+        else:
+            print("Sleeeping for 15 seconds - move the mambo around")
+            mambo.smart_sleep(15)
+
+        # done doing vision demo
+        print("Ending the sleep and vision")
+        mamboVision.close_video()
+
+        mambo.smart_sleep(5)
+
+    print("disconnecting")
+    mambo.disconnect()
